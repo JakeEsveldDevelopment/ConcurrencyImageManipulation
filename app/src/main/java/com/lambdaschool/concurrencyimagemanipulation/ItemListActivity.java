@@ -256,6 +256,42 @@ public class ItemListActivity extends AppCompatActivity {
                 }
             }).start();
 
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+
+                    try {
+                        imageListLock.acquire();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    ImageContainer imageContainer = mValues.get(position);
+                    imageListLock.release();
+                    while(imageContainer.getModified() == null){
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        try {
+                            imageListLock.acquire();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        imageContainer = mValues.get(position);
+                        imageListLock.release();
+                    }
+                    final Bitmap modified = imageContainer.getModified();
+                    mParentActivity.runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            holder.mProcessedView.setImageBitmap(modified);
+                        }
+                    });
+
+                }
+            }).start();
+
             holder.itemView.setTag(mValues.get(position));
             holder.itemView.setOnClickListener(mOnClickListener);
         }
