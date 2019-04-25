@@ -2,6 +2,7 @@ package com.lambdaschool.concurrencyimagemanipulation;
 
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
@@ -12,11 +13,13 @@ import android.support.design.widget.Snackbar;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.TextView;
+import android.widget.ImageView;
 
 import com.lambdaschool.concurrencyimagemanipulation.dummy.DummyContent;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 
 /**
  * An activity representing a list of Items. This activity
@@ -66,15 +69,20 @@ public class ItemListActivity extends AppCompatActivity {
     }
 
     private void setupRecyclerView(@NonNull RecyclerView recyclerView) {
-        recyclerView.setAdapter(new SimpleItemRecyclerViewAdapter(this, DummyContent.ITEMS, mTwoPane));
+        recyclerView.setAdapter(new SimpleItemRecyclerViewAdapter(this, mTwoPane));
     }
 
     public static class SimpleItemRecyclerViewAdapter
             extends RecyclerView.Adapter<SimpleItemRecyclerViewAdapter.ViewHolder> {
 
         private final ItemListActivity             mParentActivity;
-        private final List<DummyContent.DummyItem> mValues;
+        private final List<ImageContainer> mValues;
         private final boolean                      mTwoPane;
+
+        private final Thread downloadThread, processThread;
+        private final Semaphore imageListLock;
+
+
         private final View.OnClickListener         mOnClickListener = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -98,11 +106,57 @@ public class ItemListActivity extends AppCompatActivity {
         };
 
         SimpleItemRecyclerViewAdapter(ItemListActivity parent,
-                                      List<DummyContent.DummyItem> items,
                                       boolean twoPane) {
-            mValues = items;
+            mValues = new ArrayList<ImageContainer>();
+
+            mValues.add(new ImageContainer("https://cdn.spacetelescope.org/archives/images/publicationjpg/heic1215b.jpg"));
+            mValues.add(new ImageContainer("https://i.redd.it/oal0dnbot2m21.jpg"));
+            mValues.add(new ImageContainer("https://cdn.spacetelescope.org/archives/images/screen/heic1206a.jpg"));
+            mValues.add(new ImageContainer("https://cdn.spacetelescope.org/archives/images/screen/heic0601a.jpg"));
             mParentActivity = parent;
             mTwoPane = twoPane;
+
+            imageListLock = new Semaphore(1);
+
+            downloadThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    if(mValues.size() > 0){
+                        for(final ImageContainer container: mValues){
+                            try {
+                                imageListLock.acquire();
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                            NetworkAdapter.backgroundBitmapFromUrl(container.getUrlString(),
+                                    new NetworkAdapter.NetworkImageCallback() {
+                                @Override
+                                public void processImage(Bitmap image) {
+                                    try {
+                                        imageListLock.acquire();
+                                    } catch (InterruptedException e) {
+                                        e.printStackTrace();
+                                    }
+
+                                    container.setOriginal(image);
+
+                                    imageListLock.release();
+                                }
+                            });
+                            imageListLock.release();
+                        }
+                    }
+                }
+            });
+            downloadThread.start();
+
+
+            processThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+
+                }
+            });
         }
 
         @Override
@@ -113,9 +167,43 @@ public class ItemListActivity extends AppCompatActivity {
         }
 
         @Override
-        public void onBindViewHolder(final ViewHolder holder, int position) {
-            holder.mIdView.setText(mValues.get(position).id);
-            holder.mContentView.setText(mValues.get(position).content);
+        public void onBindViewHolder(final ViewHolder holder, final int position) {
+
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+
+                    try {
+                        imageListLock.acquire();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    ImageContainer imageContainer = mValues.get(position);
+                    imageListLock.release();
+                    while(imageContainer.getOriginal() == null){
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        try {
+                            imageListLock.acquire();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        imageContainer = mValues.get(position);
+                        imageListLock.release();
+                    }
+                    final Bitmap original = imageContainer.getOriginal();
+                    mParentActivity.runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            holder.mOriginalView.setImageBitmap(original);
+                        }
+                    });
+
+                }
+            }).start();
 
             holder.itemView.setTag(mValues.get(position));
             holder.itemView.setOnClickListener(mOnClickListener);
@@ -127,13 +215,13 @@ public class ItemListActivity extends AppCompatActivity {
         }
 
         class ViewHolder extends RecyclerView.ViewHolder {
-            final TextView mIdView;
-            final TextView mContentView;
+            final ImageView mOriginalView;
+            final ImageView mProcessedView;
 
             ViewHolder(View view) {
                 super(view);
-                mIdView = (TextView) view.findViewById(R.id.id_text);
-                mContentView = (TextView) view.findViewById(R.id.content);
+                mOriginalView = (ImageView) view.findViewById(R.id.id_text);
+                mProcessedView = (ImageView) view.findViewById(R.id.content);
             }
         }
     }
